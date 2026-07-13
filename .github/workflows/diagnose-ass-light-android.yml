@@ -1,4 +1,4 @@
-name: Diagnose ASS-LIGHT Android Full Gradle Bundle
+name: Build ASS-LIGHT Android Installable RC
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  diagnose:
+  build-installable:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -27,21 +27,25 @@ jobs:
       - uses: android-actions/setup-android@v3
       - name: Install Android 35
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
-      - name: Run exact full release command with captured receipt
+      - name: Build exact full Android RC bundle
         working-directory: apps/ass-light-android/project
         shell: bash
         run: |
-          set +e
-          mkdir -p diagnostics
-          python3 tools/generate_sounds.py > diagnostics/sounds.log 2>&1
-          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace --console=plain > diagnostics/gradle.log 2>&1
-          code=$?
-          tail -n 400 diagnostics/gradle.log > diagnostics/gradle-tail.log
-          echo "exit_code=$code" > diagnostics/verdict.txt
-          exit 0
+          set -euo pipefail
+          mkdir -p installable
+          python3 tools/generate_sounds.py | tee installable/SOUND_GENERATION_RECEIPT.txt
+          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace --console=plain | tee installable/GRADLE_BUILD_RECEIPT.txt
+          cp app/build/outputs/apk/release/app-release.apk installable/ASS-LIGHT-Android-RC1.apk
+          cp app/build/outputs/bundle/release/app-release.aab installable/ASS-LIGHT-Android-RC1.aab
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs installable/ASS-LIGHT-Android-RC1.apk | tee installable/APKSIGNER_RECEIPT.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging installable/ASS-LIGHT-Android-RC1.apk | tee installable/AAPT_BADGING_RECEIPT.txt
+          grep -q "package: name='com.ghostatlas.asslight.rc'" installable/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" installable/AAPT_BADGING_RECEIPT.txt
+          ! grep -q "android.permission.INTERNET" installable/AAPT_BADGING_RECEIPT.txt
+          sha256sum installable/ASS-LIGHT-Android-RC1.apk installable/ASS-LIGHT-Android-RC1.aab > installable/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: ASS-LIGHT-Full-Gradle-Diagnostics
-          path: apps/ass-light-android/project/diagnostics/
+          name: ASS-LIGHT-Android-RC1-Installable
+          path: apps/ass-light-android/project/installable/
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 90
