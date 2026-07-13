@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.content.res.AssetFileDescriptor;
 import android.os.Build;
 
@@ -11,8 +12,9 @@ import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
+import java.util.Set;
 
 final class SelfAudit {
     static final int[] SOUND_RESOURCES = {
@@ -21,6 +23,7 @@ final class SelfAudit {
         R.raw.fart_09, R.raw.fart_10, R.raw.fart_11, R.raw.fart_12
     };
 
+    private static final String FGS_MEDIA_PERMISSION = "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK";
     private static final String[] REQUIRED_PERMISSIONS = {
         Manifest.permission.FOREGROUND_SERVICE,
         Manifest.permission.WAKE_LOCK,
@@ -48,7 +51,7 @@ final class SelfAudit {
 
         boolean notificationGranted = Build.VERSION.SDK_INT < 33
             || context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
-        report.add(notificationGranted ? "NOTIFICATION_PERMISSION" : "NOTIFICATION_PERMISSION", notificationGranted, false,
+        report.add("NOTIFICATION_PERMISSION", notificationGranted, false,
             notificationGranted ? "Foreground control can be shown." : "User has not granted notification display yet.");
 
         boolean running = context.getSharedPreferences("ass_light", Context.MODE_PRIVATE).getBoolean("running", false);
@@ -59,13 +62,15 @@ final class SelfAudit {
 
     private static void auditSounds(Context context, Report report) {
         List<Long> lengths = new ArrayList<>();
+        Set<Long> distinctLengths = new HashSet<>();
         boolean allWave = true;
         boolean allSized = true;
-        for (int i = 0; i < SOUND_RESOURCES.length; i++) {
-            try (AssetFileDescriptor afd = context.getResources().openRawResourceFd(SOUND_RESOURCES[i])) {
+        for (int resource : SOUND_RESOURCES) {
+            try (AssetFileDescriptor afd = context.getResources().openRawResourceFd(resource)) {
                 if (afd == null) throw new IllegalStateException("missing descriptor");
                 long length = afd.getLength();
                 lengths.add(length);
+                distinctLengths.add(length);
                 allSized &= length > 4096;
                 byte[] header = new byte[12];
                 try (FileInputStream input = new FileInputStream(afd.getFileDescriptor())) {
@@ -83,8 +88,8 @@ final class SelfAudit {
         }
         report.add("WAV_HEADERS", allWave, true, "All packaged sounds expose RIFF/WAVE headers.");
         report.add("WAV_PAYLOADS", allSized, true, "Lengths: " + lengths);
-        long distinct = lengths.stream().distinct().count();
-        report.add("SOUND_DIVERSITY", distinct >= 10, true, distinct + " distinct payload lengths");
+        report.add("SOUND_DIVERSITY", distinctLengths.size() >= 10, true,
+            distinctLengths.size() + " distinct payload lengths");
     }
 
     private static void auditPermissions(Context context, Report report) {
@@ -92,19 +97,25 @@ final class SelfAudit {
             PackageManager pm = context.getPackageManager();
             PackageInfo info = pm.getPackageInfo(context.getPackageName(), PackageManager.GET_PERMISSIONS | PackageManager.GET_SERVICES);
             List<String> declared = info.requestedPermissions == null
-                ? new ArrayList<>() : Arrays.asList(info.requestedPermissions);
+                ? new ArrayList<String>() : Arrays.asList(info.requestedPermissions);
             for (String permission : REQUIRED_PERMISSIONS) {
                 report.add("DECLARE_" + permission.substring(permission.lastIndexOf('.') + 1),
                     declared.contains(permission), true, permission);
             }
             if (Build.VERSION.SDK_INT >= 34) {
-                report.add("DECLARE_FGS_MEDIA", declared.contains(Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK), true,
-                    Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK);
+                report.add("DECLARE_FGS_MEDIA", declared.contains(FGS_MEDIA_PERMISSION), true, FGS_MEDIA_PERMISSION);
             }
             report.add("NO_INTERNET_PERMISSION", !declared.contains(Manifest.permission.INTERNET), true,
                 "No network capability declared.");
-            boolean servicePresent = info.services != null && Arrays.stream(info.services)
-                .anyMatch(service -> service.name.endsWith("ChaosService") && !service.exported);
+            boolean servicePresent = false;
+            if (info.services != null) {
+                for (ServiceInfo service : info.services) {
+                    if (service.name.endsWith("ChaosService") && !service.exported) {
+                        servicePresent = true;
+                        break;
+                    }
+                }
+            }
             report.add("PRIVATE_FOREGROUND_SERVICE", servicePresent, true,
                 "ChaosService exists and is not exported.");
         } catch (Exception error) {
@@ -140,12 +151,17 @@ final class SelfAudit {
         }
 
         boolean hasCriticalFailure() {
-            return gates.stream().anyMatch(gate -> gate.critical && "FAILED".equals(gate.state));
+            for (Gate gate : gates) {
+                if (gate.critical && "FAILED".equals(gate.state)) return true;
+            }
+            return false;
         }
 
         String state() {
             if (hasCriticalFailure()) return "FAILED";
-            if (gates.stream().anyMatch(gate -> "PARTIAL".equals(gate.state))) return "PARTIAL";
+            for (Gate gate : gates) {
+                if ("PARTIAL".equals(gate.state)) return "PARTIAL";
+            }
             return "VERIFIED";
         }
 
