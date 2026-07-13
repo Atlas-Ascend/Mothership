@@ -137,9 +137,24 @@ jobs:
             --apksigner-receipt receipts/APKSIGNER_RECEIPT.txt \
             --aapt-receipt receipts/AAPT_BADGING_RECEIPT.txt
 
+      - name: Preserve signed Android build candidate immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Signed-Candidate
+          path: |
+            ${{ env.P }}/downloads/ASS-LIGHT-Android-RC1.apk
+            ${{ env.P }}/downloads/ASS-LIGHT-Android-RC1.aab
+            ${{ env.P }}/receipts/APKSIGNER_RECEIPT.txt
+            ${{ env.P }}/receipts/AAPT_BADGING_RECEIPT.txt
+            ${{ env.P }}/receipts/SECA_ARTIFACT_AUDIT.json
+            ${{ env.P }}/receipts/SECA_ARTIFACT_AUDIT.md
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Emulator install, launch, sound startup, and Portal Seal cleanup
         id: android_runtime
         continue-on-error: true
+        timeout-minutes: 18
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
