@@ -72,18 +72,42 @@ jobs:
           python3 tools/seca_audit.py --stage source
 
       - name: Compile, lint, test-package, and sign Android artifacts
+        id: compile
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
+          mkdir -p downloads receipts
+          set +e
           gradle --no-daemon clean \
             :app:lintRelease \
             :app:assembleRelease \
             :app:bundleRelease \
             :app:assembleDebug \
-            :app:assembleDebugAndroidTest
-          mkdir -p downloads receipts
-          cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
-          cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
+            :app:assembleDebugAndroidTest \
+            2>&1 | tee receipts/GRADLE_BUILD.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
+            cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
+          fi
+          exit 0
+
+      - name: Preserve Gradle diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Gradle-Diagnostics
+          path: ${{ env.PROJECT_DIR }}/receipts/GRADLE_BUILD.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce compile gate
+        if: steps.compile.outputs.exit_code != '0'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "ASS-LIGHT compile gate failed. Final diagnostic lines:"
+          tail -n 240 receipts/GRADLE_BUILD.log
+          exit 1
 
       - name: Verify APK signature, package identity, SDK, and permission boundary
         working-directory: ${{ env.PROJECT_DIR }}
