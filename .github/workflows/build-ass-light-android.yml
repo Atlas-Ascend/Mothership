@@ -33,8 +33,6 @@ jobs:
         run: |
           unzip -o source.zip -d .
           cp -R overrides/. .
-          base64 --decode signing/asslight-direct.keystore.b64 > signing/asslight-direct.keystore
-          chmod 600 signing/asslight-direct.keystore
 
       - name: Install Java 17
         uses: actions/setup-java@v4
