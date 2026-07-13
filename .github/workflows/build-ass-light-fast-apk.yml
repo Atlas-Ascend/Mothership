@@ -1,0 +1,54 @@
+name: Fast Build ASS-LIGHT Android APK
+
+on:
+  push:
+    branches: [ass-light-fast-apk]
+    paths:
+      - "apps/ass-light-android/project/**"
+      - ".github/workflows/build-ass-light-fast-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PROJECT_DIR: apps/ass-light-android/project
+      APK_NAME: ASS-LIGHT-Android-RC1.apk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android build platform
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Forge sounds, audit source, and build APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          python3 tools/generate_sounds.py
+          python3 tools/seca_audit.py --stage source
+          gradle --no-daemon :app:lintRelease :app:assembleRelease
+          mkdir -p fast-download
+          cp app/build/outputs/apk/release/app-release.apk "fast-download/$APK_NAME"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "fast-download/$APK_NAME" > fast-download/APKSIGNER_RECEIPT.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "fast-download/$APK_NAME" > fast-download/AAPT_BADGING_RECEIPT.txt
+          grep -q "package: name='com.ghostatlas.asslight.rc'" fast-download/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" fast-download/AAPT_BADGING_RECEIPT.txt
+          ! grep -q "android.permission.INTERNET" fast-download/AAPT_BADGING_RECEIPT.txt
+          sha256sum "fast-download/$APK_NAME" > fast-download/SHA256SUMS.txt
+      - name: Upload direct-install APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-APK
+          path: ${{ env.PROJECT_DIR }}/fast-download/*
+          if-no-files-found: error
+          retention-days: 90
