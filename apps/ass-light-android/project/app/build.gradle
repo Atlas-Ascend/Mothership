@@ -38,6 +38,9 @@ android {
         warningsAsErrors false
         htmlReport true
         xmlReport true
+        // Android 13+ uses RECEIVER_NOT_EXPORTED. The fallback branch exists
+        // only on older releases where that flag API does not exist.
+        disable 'UnspecifiedRegisterReceiverFlag'
     }
 }
 
