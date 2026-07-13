@@ -2,6 +2,6 @@
 
 Ghost Atlas public application delivery repository.
 
-## ASS-LIGHT
+## ASS-LIGHT Android RC1
 
-Android-ready novelty app with randomized sound intervals, variable volume, and optional flashlight pulses.
+Native Android direct-install release candidate with generated original sound assets, randomized bounded playback, visible foreground service control, optional flashlight support, and SECA build-truth receipts.
