@@ -73,9 +73,14 @@ jobs:
       - name: Compile, lint, sign, and assemble Android artifacts
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
-          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest
-          mkdir -p downloads receipts
+          set -uo pipefail
+          mkdir -p receipts downloads
+          if ! gradle --no-daemon --console=plain clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest > receipts/GRADLE_BUILD.log 2>&1; then
+            echo "===== EXACT GRADLE FAILURE TAIL ====="
+            tail -n 180 receipts/GRADLE_BUILD.log
+            exit 1
+          fi
+          tail -n 40 receipts/GRADLE_BUILD.log
           cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
           cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
 
@@ -153,6 +158,7 @@ jobs:
           cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
           cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
           cp receipts/ADB_LAUNCH_RECEIPT.txt downloads/
+          cp receipts/GRADLE_BUILD.log downloads/
           zip -qr downloads/ASS-LIGHT-Android-RC1-source.zip \
             README.md PRODUCT_DEFINITION.json SECA_GATE_MATRIX.json settings.gradle build.gradle gradle.properties app tools docs \
             -x 'app/build/*' 'app/src/main/res/raw/*.wav' 'app/src/main/res/raw/sound_manifest.json' 'receipts/*' 'downloads/*' 'tools/__pycache__/*'
