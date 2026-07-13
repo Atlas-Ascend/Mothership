@@ -71,13 +71,10 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(26), dp(20), dp(40));
         scroll.addView(root);
 
-        TextView eyebrow = text("A POCKET TRICKSTER · ANDROID RC1", 13, mint, true);
-        root.addView(eyebrow);
-
+        root.addView(text("A POCKET TRICKSTER · ANDROID RC1", 13, mint, true));
         TextView title = text("ASS-LIGHT", 38, Color.WHITE, true);
         title.setPadding(0, dp(4), 0, 0);
         root.addView(title);
-
         TextView subtitle = text("Open the portal. Break the tension. Deny the atmosphere.", 17, Color.LTGRAY, false);
         subtitle.setPadding(0, 0, 0, dp(18));
         root.addView(subtitle);
@@ -86,7 +83,7 @@ public class MainActivity extends Activity {
         definition.addView(text("BUILD-TRUTH DEFINITION", 13, mint, true));
         definition.addView(text(
             "User-started randomized comedy sounds with bounded intervals and app-local volume. " +
-            "Flash mode is off by default. No covert startup, network access, recording, analytics, ads, or system-volume mutation.",
+            "Flash mode is off by default. No covert startup, network access, recording, tracking, sponsors, or system-volume mutation.",
             15, Color.WHITE, false));
         root.addView(definition);
 
@@ -126,15 +123,12 @@ public class MainActivity extends Activity {
         Button open = actionButton("OPEN THE BROWN PORTAL", purple);
         open.setOnClickListener(v -> openPortal());
         root.addView(open, matchWrapWithTop(12));
-
         Button test = actionButton("TEST GUST", Color.rgb(64, 52, 86));
         test.setOnClickListener(v -> playOnce());
         root.addView(test, matchWrapWithTop(10));
-
         Button seal = actionButton("SEAL THE PORTAL", Color.rgb(112, 43, 66));
         seal.setOnClickListener(v -> sealPortal());
         root.addView(seal, matchWrapWithTop(10));
-
         torchButton = actionButton(torch.isAvailable() ? "FLASHLIGHT · OFF" : "FLASHLIGHT · NOT AVAILABLE", Color.rgb(45, 104, 94));
         torchButton.setEnabled(torch.isAvailable());
         torchButton.setOnClickListener(v -> toggleTorch());
@@ -143,7 +137,6 @@ public class MainActivity extends Activity {
         statusText = text("Portal sealed. The allegations remain.", 15, mint, true);
         statusText.setPadding(0, dp(18), 0, dp(8));
         root.addView(statusText);
-
         oracleText = text("“What do you mean? I didn’t hear anything.”", 21, Color.WHITE, false);
         oracleText.setTypeface(Typeface.create("serif", Typeface.ITALIC));
         root.addView(oracleText);
@@ -152,7 +145,6 @@ public class MainActivity extends Activity {
         Button audit = actionButton("RUN SECA PREFLIGHT", Color.rgb(48, 73, 112));
         audit.setOnClickListener(v -> runPreflight());
         root.addView(audit, matchWrap());
-
         auditText = text("Audit has not run.", 14, Color.LTGRAY, false);
         auditText.setPadding(0, dp(12), 0, dp(8));
         root.addView(auditText);
@@ -164,7 +156,6 @@ public class MainActivity extends Activity {
             13, Color.GRAY, false);
         safety.setPadding(0, dp(18), 0, 0);
         root.addView(safety);
-
         return scroll;
     }
 
@@ -175,8 +166,7 @@ public class MainActivity extends Activity {
             statusText.setText("SECA BLOCKED · resolve required checks before opening the portal.");
             return;
         }
-        Intent intent = serviceIntent(ChaosService.ACTION_START);
-        startChaosService(intent);
+        startChaosService(serviceIntent(ChaosService.ACTION_START));
         statusText.setText("Portal open · " + selectedProfile() + " · persistent stop control active");
     }
 
