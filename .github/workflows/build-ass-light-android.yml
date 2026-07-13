@@ -7,12 +7,17 @@ on:
     paths:
       - "apps/ass-light-android/source.zip"
       - ".github/workflows/build-ass-light-android.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/ass-light-android/source.zip"
+      - ".github/workflows/build-ass-light-android.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: ass-light-android-rc1
+  group: ass-light-android-rc1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -155,6 +160,7 @@ jobs:
           retention-days: 90
 
       - name: Publish or replace public GitHub release assets
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
