@@ -1,4 +1,4 @@
-# SECA review run revision 2
+# SECA review run revision 3
 name: ASS-LIGHT Android SECA Release
 
 on:
@@ -35,14 +35,14 @@ jobs:
         with: {gradle-version: '8.10.2'}
       - uses: android-actions/setup-android@v3
 
-      - name: Unpack source and install Android SDK
+      - name: Unpack immutable source packet
         run: |
           set -euo pipefail
           rm -rf "$P" && mkdir -p "$P"
           unzip -q apps/ass-light-android/source.zip -d "$P"
           test -f "$P/PRODUCT_DEFINITION.json"
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+          test -f "$P/app/build.gradle"
+          test -f "$P/tools/seca_audit.py"
 
       - name: Generate original sounds, source-audit, lint, and build
         working-directory: ${{ env.P }}
