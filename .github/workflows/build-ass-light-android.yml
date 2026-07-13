@@ -5,12 +5,14 @@ on:
   push:
     branches: [main]
     paths:
-      - "apps/ass-light-android/source.zip"
+      - "apps/ass-light-android/source_parts/**"
+      - "apps/ass-light-android/source_chunks/**"
       - ".github/workflows/build-ass-light-android.yml"
   pull_request:
     branches: [main]
     paths:
-      - "apps/ass-light-android/source.zip"
+      - "apps/ass-light-android/source_parts/**"
+      - "apps/ass-light-android/source_chunks/**"
       - ".github/workflows/build-ass-light-android.yml"
 
 permissions:
@@ -31,17 +33,31 @@ jobs:
       AAB_NAME: ASS-LIGHT-Android-RC1.aab
       RELEASE_TAG: ass-light-android-rc1
       PACKAGE_ID: com.ghostatlas.asslight.rc
+      SOURCE_SHA256: e770e631bf50814d70f631e917cf46ac3f432ddf5dcbd1efa8e53b6e76771cbc
 
     steps:
       - name: Checkout Mothership
         uses: actions/checkout@v4
 
-      - name: Unpack immutable ASS-LIGHT source packet
+      - name: Reconstruct and verify immutable ASS-LIGHT source packet
         run: |
           set -euo pipefail
           rm -rf "$PROJECT_DIR"
-          mkdir -p "$PROJECT_DIR"
-          unzip -q apps/ass-light-android/source.zip -d "$PROJECT_DIR"
+          mkdir -p "$PROJECT_DIR" /tmp/ass-light-source
+          tr -d '\r\n' < apps/ass-light-android/source_parts/part00 | base64 --decode > /tmp/ass-light-source/00.bin
+          tr -d '\r\n' < apps/ass-light-android/source_parts/part01 | base64 --decode > /tmp/ass-light-source/01.bin
+          cat \
+            /tmp/ass-light-source/00.bin \
+            /tmp/ass-light-source/01.bin \
+            apps/ass-light-android/source_chunks/02.bin \
+            apps/ass-light-android/source_chunks/03.bin \
+            apps/ass-light-android/source_chunks/04.bin \
+            apps/ass-light-android/source_chunks/05.bin \
+            apps/ass-light-android/source_chunks/06.bin \
+            > /tmp/ASS-LIGHT-Android-RC1-source.zip
+          echo "$SOURCE_SHA256  /tmp/ASS-LIGHT-Android-RC1-source.zip" | sha256sum --check --strict
+          unzip -t /tmp/ASS-LIGHT-Android-RC1-source.zip
+          unzip -q /tmp/ASS-LIGHT-Android-RC1-source.zip -d "$PROJECT_DIR"
           test -f "$PROJECT_DIR/app/build.gradle"
           test -f "$PROJECT_DIR/tools/seca_audit.py"
           test -f "$PROJECT_DIR/PRODUCT_DEFINITION.json"
@@ -70,7 +86,6 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/generate_sounds.py
-          base64 --decode signing/asslight-direct.keystore.b64 > signing/asslight-direct.keystore
           python3 tools/seca_audit.py --stage source
 
       - name: Build, lint, and assemble Android artifacts
@@ -149,7 +164,7 @@ jobs:
           cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
           cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
           cp receipts/ADB_LAUNCH_RECEIPT.txt downloads/
-          cp "$GITHUB_WORKSPACE/apps/ass-light-android/source.zip" downloads/ASS-LIGHT-Android-RC1-source.zip
+          cp /tmp/ASS-LIGHT-Android-RC1-source.zip downloads/
           sha256sum downloads/* > downloads/SHA256SUMS.txt
 
       - name: Upload immutable workflow proof artifact
