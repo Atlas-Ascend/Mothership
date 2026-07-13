@@ -92,8 +92,12 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
-          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest
-          mkdir -p downloads receipts
+          mkdir -p receipts downloads
+          if ! gradle --quiet --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest > receipts/GRADLE_BUILD_LOG.txt 2>&1; then
+            echo "===== ACTIONABLE GRADLE FAILURE ====="
+            tail -n 140 receipts/GRADLE_BUILD_LOG.txt
+            exit 1
+          fi
           cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
           cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
 
@@ -164,6 +168,7 @@ jobs:
           cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
           cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
           cp receipts/ADB_LAUNCH_RECEIPT.txt downloads/
+          cp receipts/GRADLE_BUILD_LOG.txt downloads/
           cp /tmp/ASS-LIGHT-Android-RC1-source.zip downloads/
           sha256sum downloads/* > downloads/SHA256SUMS.txt
 
