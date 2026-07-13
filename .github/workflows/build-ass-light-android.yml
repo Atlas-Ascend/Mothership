@@ -90,6 +90,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "downloads/$APK_NAME" | tee receipts/APKSIGNER_RECEIPT.txt
           "$BUILD_TOOLS/aapt" dump badging "downloads/$APK_NAME" | tee receipts/AAPT_BADGING_RECEIPT.txt
           grep -q "package: name='$PACKAGE_ID'" receipts/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" receipts/AAPT_BADGING_RECEIPT.txt
           if grep -q "android.permission.INTERNET" receipts/AAPT_BADGING_RECEIPT.txt; then
             echo "Unexpected INTERNET permission" >&2
             exit 1
@@ -98,7 +99,7 @@ jobs:
             --apk "downloads/$APK_NAME" \
             --aab "downloads/$AAB_NAME" \
             --apksigner-receipt receipts/APKSIGNER_RECEIPT.txt \
-            --aapt-receipt receipts/AAPT_BADGING_RECEIPT.txt
+            --badging-receipt receipts/AAPT_BADGING_RECEIPT.txt
 
       - name: Run Android emulator installation, launch, and instrumentation gates
         uses: reactivecircus/android-emulator-runner@v2
@@ -142,8 +143,8 @@ jobs:
           cp receipts/SECA_ARTIFACT_AUDIT.md downloads/
           cp receipts/SECA_RUNTIME_AUDIT.json downloads/
           cp receipts/SECA_RUNTIME_AUDIT.md downloads/
-          cp receipts/SECA_FINAL_AUDIT.json downloads/
-          cp receipts/SECA_FINAL_AUDIT.md downloads/
+          cp receipts/SECA_FINAL_RELEASE_RECEIPT.json downloads/
+          cp receipts/SECA_FINAL_RELEASE_RECEIPT.md downloads/
           cp receipts/APKSIGNER_RECEIPT.txt downloads/
           cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
           cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
