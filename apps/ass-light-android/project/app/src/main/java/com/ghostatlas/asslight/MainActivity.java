@@ -22,6 +22,8 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.ContextCompat;
+
 public class MainActivity extends Activity {
     private static final int CAMERA_REQUEST = 4101;
     private static final int NOTIFICATION_REQUEST = 4102;
@@ -205,8 +207,7 @@ public class MainActivity extends Activity {
 
     private void registerEventReceiver() {
         IntentFilter filter = new IntentFilter(ChaosService.ACTION_EVENT);
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(eventReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(eventReceiver, filter);
+        ContextCompat.registerReceiver(this, eventReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
         receiverRegistered = true;
     }
 
