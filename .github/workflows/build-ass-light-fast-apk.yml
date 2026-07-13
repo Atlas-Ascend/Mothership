@@ -1,8 +1,8 @@
 name: Fast Build ASS-LIGHT Android APK
 
 on:
-  push:
-    branches: [ass-light-fast-apk]
+  pull_request:
+    branches: [main]
     paths:
       - "apps/ass-light-android/project/**"
       - ".github/workflows/build-ass-light-fast-apk.yml"
