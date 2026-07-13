@@ -107,7 +107,7 @@ final class SelfAudit {
     private static Check checkForegroundService(Context context) {
         try {
             ComponentName name = new ComponentName(context, ChaosService.class);
-            android.content.pm.ServiceInfo info;
+            ServiceInfo info;
             if (Build.VERSION.SDK_INT >= 33) {
                 info = context.getPackageManager().getServiceInfo(name, PackageManager.ComponentInfoFlags.of(0));
             } else {
@@ -115,7 +115,7 @@ final class SelfAudit {
             }
             boolean privateService = !info.exported;
             boolean mediaPlayback = Build.VERSION.SDK_INT < 29
-                || (info.foregroundServiceType & ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) != 0;
+                || (info.getForegroundServiceType() & ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) != 0;
             return new Check(
                 "FOREGROUND_SERVICE",
                 "Visible background engine",
