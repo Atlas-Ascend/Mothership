@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.ghostatlas.asslight'
+    compileSdk 35
+
+    defaultConfig {
+        // Public direct-install RC. The future Play package keeps the clean
+        // com.ghostatlas.asslight identity and must use a private upload key.
+        applicationId 'com.ghostatlas.asslight.rc'
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0-rc1'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            shrinkResources false
+            // Direct-install RC signing only. Production Play signing is a
+            // separate blocked gate and never inherits this configuration.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds true
+        warningsAsErrors false
+        htmlReport true
+        xmlReport true
+    }
+}
+
+dependencies {
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+}
