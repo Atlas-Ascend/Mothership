@@ -1,0 +1,26 @@
+{
+  "schema": "ghost-atlas.seca.gate-matrix.v2",
+  "states": ["VERIFIED", "PARTIAL", "UNVERIFIED", "BLOCKED", "FAILED", "REQUIRES_REPAIR"],
+  "product": "ASS-LIGHT",
+  "distribution_identity": "com.ghostatlas.asslight.rc",
+  "production_identity_reserved": "com.ghostatlas.asslight",
+  "gates": [
+    {"id":"DEF-001","area":"definition","requirement":"Definition, direct-RC boundary, production identity, and forbidden behavior are explicit.","proof":"PRODUCT_DEFINITION.json + source audit","hard_gate":true},
+    {"id":"AUD-001","area":"audio","requirement":"Exactly 12 unique mono 16-bit PCM WAV files at 44.1 kHz, each non-silent and 0.35-2.10 seconds.","proof":"sound manifest + wave parser","hard_gate":true},
+    {"id":"AUD-002-SRC","area":"audio","requirement":"Runtime success receipt is emitted only after MediaPlayer prepares and starts.","proof":"source audit","hard_gate":true},
+    {"id":"AUD-002","area":"audio","requirement":"Embedded sound prepares and starts on Android emulator with bounded sound and volume receipt.","proof":"instrumented runtime test XML","hard_gate":true},
+    {"id":"RNG-001","area":"randomization","requirement":"Sound, delay, oracle, and app-local volume use bounded SecureRandom selection.","proof":"source audit + runtime bounds assertion","hard_gate":true},
+    {"id":"BG-001","area":"background","requirement":"Execution is user-started, private, visible, mediaPlayback foreground service, and stoppable.","proof":"manifest and source audit","hard_gate":true},
+    {"id":"BG-002","area":"background","requirement":"Foreground session starts and Portal Seal clears running state.","proof":"instrumented runtime test XML","hard_gate":true},
+    {"id":"CTL-001","area":"control","requirement":"Portal Seal stops timers, playback, torch, wake lock, notification, and service.","proof":"source audit + runtime lifecycle test","hard_gate":true},
+    {"id":"TOR-001","area":"flashlight","requirement":"Torch is optional, permission and hardware gated, off by default, and limited to one 180 ms pulse.","proof":"source audit + physical-device HITL receipt","hard_gate":false},
+    {"id":"SAFE-001","area":"safety","requirement":"No boot receiver, INTERNET permission, analytics, ads, recording, system-volume mutation, or unbounded strobe.","proof":"manifest, dependencies, source denylist, and APK badging","hard_gate":true},
+    {"id":"SDK-001","area":"platform","requirement":"Compile and target SDK 35, min SDK 23, Java 17, Android instrumentation runner.","proof":"Gradle + APK badging","hard_gate":true},
+    {"id":"UX-001","area":"adaptive UI","requirement":"Explicit controls and no forced portrait orientation.","proof":"source and manifest audit","hard_gate":true},
+    {"id":"SIG-001","area":"signing","requirement":"Direct-install APK signature verifies cryptographically.","proof":"apksigner receipt","hard_gate":true},
+    {"id":"INS-001","area":"install","requirement":"Release APK installs on API 35 emulator.","proof":"ADB install receipt","hard_gate":true},
+    {"id":"LCH-001","area":"launch","requirement":"Installed launcher activity starts without immediate crash.","proof":"ADB launch receipt","hard_gate":true},
+    {"id":"PLAY-001","area":"Google Play","requirement":"AAB technical candidate exists but private upload key and Play Console review remain open.","proof":"AAB artifact + external HITL","hard_gate":false},
+    {"id":"PHY-001","area":"physical device","requirement":"Audible quality, speaker routing, rear torch, lock-screen timing, and OEM battery behavior verified on a real phone.","proof":"MANUAL_HITL_DEVICE_RECEIPT.md","hard_gate":false}
+  ]
+}
