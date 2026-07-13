@@ -21,6 +21,8 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import androidx.core.content.ContextCompat;
+
 public class MainActivity extends Activity {
     private static final int REQUEST_NOTIFICATIONS = 41;
     private static final int REQUEST_CAMERA = 42;
@@ -253,8 +255,7 @@ public class MainActivity extends Activity {
     @Override protected void onStart() {
         super.onStart();
         IntentFilter filter = new IntentFilter(ChaosService.ACTION_EVENT);
-        if (Build.VERSION.SDK_INT >= 33) registerReceiver(eventReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(eventReceiver, filter);
+        ContextCompat.registerReceiver(this, eventReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
         receiverRegistered = true;
     }
 
