@@ -2,15 +2,15 @@ name: Build, SECA Audit, and Publish ASS-LIGHT Android RC
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "apps/ass-light-android/source.zip"
-      - ".github/workflows/build-ass-light-android.yml"
   pull_request:
     branches: [main]
     paths:
-      - "apps/ass-light-android/source.zip"
+      - "apps/ass-light-android/project/**"
+      - ".github/workflows/build-ass-light-android.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/ass-light-android/project/**"
       - ".github/workflows/build-ass-light-android.yml"
 
 permissions:
@@ -23,28 +23,26 @@ concurrency:
 jobs:
   build-audit-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     env:
-      PROJECT_DIR: build/ass-light-android
-      DOWNLOAD_DIR: build/ass-light-android/downloads
+      PROJECT_DIR: apps/ass-light-android/project
       APK_NAME: ASS-LIGHT-Android-RC1.apk
       AAB_NAME: ASS-LIGHT-Android-RC1.aab
       RELEASE_TAG: ass-light-android-rc1
       PACKAGE_ID: com.ghostatlas.asslight.rc
 
     steps:
-      - name: Checkout Mothership
+      - name: Checkout inspectable ASS-LIGHT source
         uses: actions/checkout@v4
 
-      - name: Unpack immutable ASS-LIGHT source packet
+      - name: Verify project structure
         run: |
           set -euo pipefail
-          rm -rf "$PROJECT_DIR"
-          mkdir -p "$PROJECT_DIR"
-          unzip -q apps/ass-light-android/source.zip -d "$PROJECT_DIR"
           test -f "$PROJECT_DIR/app/build.gradle"
+          test -f "$PROJECT_DIR/tools/generate_sounds.py"
           test -f "$PROJECT_DIR/tools/seca_audit.py"
           test -f "$PROJECT_DIR/PRODUCT_DEFINITION.json"
+          test -f "$PROJECT_DIR/SECA_GATE_MATRIX.json"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -52,37 +50,66 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle 8.10.2
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.10.2'
+          gradle-version: '8.9'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android platform and build tools
+      - name: Install Android 15 platform and emulator
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
 
-      - name: Regenerate original sounds and run SECA source audit
+      - name: Forge original sounds and run SECA source audit
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
           python3 tools/generate_sounds.py
-          base64 --decode signing/asslight-direct.keystore.b64 > signing/asslight-direct.keystore
           python3 tools/seca_audit.py --stage source
 
-      - name: Build, lint, and assemble Android artifacts
+      - name: Compile, lint, test-package, and sign Android artifacts
+        id: compile
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
-          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest
           mkdir -p downloads receipts
-          cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
-          cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
+          set +e
+          gradle --no-daemon clean \
+            :app:lintRelease \
+            :app:assembleRelease \
+            :app:bundleRelease \
+            :app:assembleDebug \
+            :app:assembleDebugAndroidTest \
+            2>&1 | tee receipts/GRADLE_BUILD.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 0 ]; then
+            cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
+            cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
+          fi
+          exit 0
 
-      - name: Verify APK signature and package contract
+      - name: Preserve Gradle diagnostic receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Gradle-Diagnostics
+          path: ${{ env.PROJECT_DIR }}/receipts/GRADLE_BUILD.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce compile gate
+        if: steps.compile.outputs.exit_code != '0'
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "ASS-LIGHT compile gate failed. Final diagnostic lines:"
+          tail -n 240 receipts/GRADLE_BUILD.log
+          exit 1
+
+      - name: Verify APK signature, package identity, SDK, and permission boundary
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -90,6 +117,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "downloads/$APK_NAME" | tee receipts/APKSIGNER_RECEIPT.txt
           "$BUILD_TOOLS/aapt" dump badging "downloads/$APK_NAME" | tee receipts/AAPT_BADGING_RECEIPT.txt
           grep -q "package: name='$PACKAGE_ID'" receipts/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" receipts/AAPT_BADGING_RECEIPT.txt
           if grep -q "android.permission.INTERNET" receipts/AAPT_BADGING_RECEIPT.txt; then
             echo "Unexpected INTERNET permission" >&2
             exit 1
@@ -98,9 +126,9 @@ jobs:
             --apk "downloads/$APK_NAME" \
             --aab "downloads/$AAB_NAME" \
             --apksigner-receipt receipts/APKSIGNER_RECEIPT.txt \
-            --aapt-receipt receipts/AAPT_BADGING_RECEIPT.txt
+            --badging-receipt receipts/AAPT_BADGING_RECEIPT.txt
 
-      - name: Run Android emulator installation, launch, and instrumentation gates
+      - name: Android 15 install, launch, playback, foreground-service, and Portal Seal audit
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -114,7 +142,14 @@ jobs:
             adb install -r "downloads/$APK_NAME" | tee receipts/ADB_INSTALL_RECEIPT.txt
             adb shell pm grant "$PACKAGE_ID" android.permission.POST_NOTIFICATIONS || true
             adb shell monkey -p "$PACKAGE_ID" -c android.intent.category.LAUNCHER 1 | tee receipts/ADB_LAUNCH_RECEIPT.txt
+            sleep 2
+            adb shell pidof "$PACKAGE_ID"
+            adb logcat -c
             gradle --no-daemon connectedDebugAndroidTest
+            if adb logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime.*com.ghostatlas.asslight"; then
+              echo "ASS-LIGHT crashed during emulator audit" >&2
+              exit 1
+            fi
 
       - name: Run SECA runtime and final promotion audits
         working-directory: ${{ env.PROJECT_DIR }}
@@ -126,7 +161,7 @@ jobs:
             --launch-receipt receipts/ADB_LAUNCH_RECEIPT.txt
           python3 tools/seca_audit.py --stage final
 
-      - name: Assemble public proof packet
+      - name: Assemble proof packet and checksums
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
@@ -134,7 +169,6 @@ jobs:
           cp SECA_GATE_MATRIX.json downloads/
           cp docs/BUILD_TRUTH.md downloads/
           cp docs/PRIVACY_POLICY.md downloads/
-          cp docs/DATA_SAFETY.md downloads/
           cp docs/MANUAL_HITL_DEVICE_RECEIPT.md downloads/
           cp receipts/SECA_SOURCE_AUDIT.json downloads/
           cp receipts/SECA_SOURCE_AUDIT.md downloads/
@@ -142,33 +176,47 @@ jobs:
           cp receipts/SECA_ARTIFACT_AUDIT.md downloads/
           cp receipts/SECA_RUNTIME_AUDIT.json downloads/
           cp receipts/SECA_RUNTIME_AUDIT.md downloads/
-          cp receipts/SECA_FINAL_AUDIT.json downloads/
-          cp receipts/SECA_FINAL_AUDIT.md downloads/
+          cp receipts/SECA_FINAL_RELEASE_RECEIPT.json downloads/
+          cp receipts/SECA_FINAL_RELEASE_RECEIPT.md downloads/
           cp receipts/APKSIGNER_RECEIPT.txt downloads/
           cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
           cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
           cp receipts/ADB_LAUNCH_RECEIPT.txt downloads/
-          cp "$GITHUB_WORKSPACE/apps/ass-light-android/source.zip" downloads/ASS-LIGHT-Android-RC1-source.zip
+          zip -qr downloads/ASS-LIGHT-Android-RC1-source.zip . \
+            -x 'app/build/*' 'receipts/*' 'downloads/*' '.gradle/*'
           sha256sum downloads/* > downloads/SHA256SUMS.txt
+          cat > downloads/INSTALL.txt <<'TXT'
+          ASS-LIGHT Android RC1
 
-      - name: Upload immutable workflow proof artifact
+          1. Download ASS-LIGHT-Android-RC1.apk directly on the Android phone, or download it on a Chromebook and move it to the phone.
+          2. Open the APK on the Android phone.
+          3. When Android asks, allow installs from that browser or Files app for this install.
+          4. Tap Install, then Open.
+          5. Grant notifications so an active portal stays visible and stoppable.
+          6. Grant camera only when deliberately using the flashlight. The app does not capture photos or video.
+
+          This is a direct-install release candidate. Physical-phone proof and Google Play production signing remain open gates.
+          TXT
+
+      - name: Preserve downloadable CI artifact
         uses: actions/upload-artifact@v4
         with:
           name: ASS-LIGHT-Android-RC1-Proof-Packet
-          path: ${{ env.DOWNLOAD_DIR }}/*
+          path: ${{ env.PROJECT_DIR }}/downloads/*
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish or replace public GitHub release assets
-        if: github.event_name != 'pull_request'
+      - name: Publish or replace hosted GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          ASSETS="$PROJECT_DIR/downloads"
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$DOWNLOAD_DIR"/* --clobber
+            gh release upload "$RELEASE_TAG" "$ASSETS"/* --clobber
           else
-            gh release create "$RELEASE_TAG" "$DOWNLOAD_DIR"/* \
+            gh release create "$RELEASE_TAG" "$ASSETS"/* \
               --title "ASS-LIGHT Android RC1" \
-              --notes "Direct-install Android release candidate. Automated SECA source, artifact, signing, emulator installation, launch, and instrumentation gates passed. Physical-phone speaker, flashlight, lock-screen, and OEM battery behavior remain manual proof gates documented in MANUAL_HITL_DEVICE_RECEIPT.md."
+              --notes "Direct-install Android release candidate. Automated SECA definition, source, audio generation, lint, compile, signing, package, Android 15 installation, launch, MediaPlayer, foreground-service, and Portal Seal gates passed. Physical-phone speaker, flashlight, lock-screen, OEM battery, private Play signing, and Play Console review remain explicit open gates."
           fi
