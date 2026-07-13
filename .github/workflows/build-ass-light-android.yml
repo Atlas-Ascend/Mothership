@@ -1,50 +1,39 @@
-name: Build, SECA Audit, and Publish ASS-LIGHT Android RC
+name: ASS-LIGHT Android SECA Release
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "apps/ass-light-android/source.zip"
+      - "apps/ass-light-android/project/**"
       - ".github/workflows/build-ass-light-android.yml"
   pull_request:
     branches: [main]
     paths:
-      - "apps/ass-light-android/source.zip"
+      - "apps/ass-light-android/project/**"
       - ".github/workflows/build-ass-light-android.yml"
 
 permissions:
   contents: write
 
 concurrency:
-  group: ass-light-android-rc1-${{ github.ref }}
+  group: ass-light-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-audit-publish:
+  seca:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
     env:
-      PROJECT_DIR: build/ass-light-android
-      DOWNLOAD_DIR: build/ass-light-android/downloads
-      APK_NAME: ASS-LIGHT-Android-RC1.apk
-      AAB_NAME: ASS-LIGHT-Android-RC1.aab
-      RELEASE_TAG: ass-light-android-rc1
-      PACKAGE_ID: com.ghostatlas.asslight.rc
+      P: apps/ass-light-android/project
+      APK: ASS-LIGHT-Android-RC1.apk
+      AAB: ASS-LIGHT-Android-RC1.aab
+      PKG: com.ghostatlas.asslight.rc
+      TAG: ass-light-android-rc1
 
     steps:
-      - name: Checkout Mothership
+      - name: Checkout readable source
         uses: actions/checkout@v4
-
-      - name: Unpack immutable ASS-LIGHT source packet
-        run: |
-          set -euo pipefail
-          rm -rf "$PROJECT_DIR"
-          mkdir -p "$PROJECT_DIR"
-          unzip -q apps/ass-light-android/source.zip -d "$PROJECT_DIR"
-          test -f "$PROJECT_DIR/app/build.gradle"
-          test -f "$PROJECT_DIR/tools/seca_audit.py"
-          test -f "$PROJECT_DIR/PRODUCT_DEFINITION.json"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -60,47 +49,112 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android platform and build tools
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+      - name: Preserve direct-RC update signing identity
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: ass-light-android-rc1-signing-v1
 
-      - name: Regenerate original sounds and run SECA source audit
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Verify source body and signing key
+        run: |
+          set -euo pipefail
+          test -f "$P/PRODUCT_DEFINITION.json"
+          test -f "$P/app/build.gradle"
+          test -f "$P/tools/seca_audit.py"
+          test -f "$P/tools/generate_sounds.py"
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=ASS-LIGHT RC1,OU=Ghost Atlas,O=Atlas-Ascend,L=Astoria,ST=Oregon,C=US"
+          fi
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey >/dev/null
+
+      - name: Generate original sounds and run SECA source audit
+        working-directory: ${{ env.P }}
         run: |
           set -euo pipefail
           python3 tools/generate_sounds.py
-          base64 --decode signing/asslight-direct.keystore.b64 > signing/asslight-direct.keystore
           python3 tools/seca_audit.py --stage source
 
-      - name: Build, lint, and assemble Android artifacts
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Lint and build APK, AAB, debug app, and instrumentation package
+        id: android_build
+        continue-on-error: true
+        working-directory: ${{ env.P }}
         run: |
           set -euo pipefail
-          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest
-          mkdir -p downloads receipts
-          cp app/build/outputs/apk/release/app-release.apk "downloads/$APK_NAME"
-          cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB_NAME"
-
-      - name: Verify APK signature and package contract
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          set -euo pipefail
-          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "downloads/$APK_NAME" | tee receipts/APKSIGNER_RECEIPT.txt
-          "$BUILD_TOOLS/aapt" dump badging "downloads/$APK_NAME" | tee receipts/AAPT_BADGING_RECEIPT.txt
-          grep -q "package: name='$PACKAGE_ID'" receipts/AAPT_BADGING_RECEIPT.txt
-          if grep -q "android.permission.INTERNET" receipts/AAPT_BADGING_RECEIPT.txt; then
-            echo "Unexpected INTERNET permission" >&2
-            exit 1
+          mkdir -p receipts downloads
+          set +e
+          gradle --no-daemon --console=plain clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest 2>&1 | tee receipts/GRADLE_BUILD_LOG.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "SECA BUILD FAILURE TAIL"
+            tail -n 260 receipts/GRADLE_BUILD_LOG.txt
+            exit "$code"
           fi
+          cp app/build/outputs/apk/release/app-release.apk "downloads/$APK"
+          cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB"
+          cp app/build/reports/lint-results-release.xml receipts/LINT_RELEASE.xml
+
+      - name: Upload build diagnostics regardless of outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Build-Diagnostics
+          path: |
+            ${{ env.P }}/receipts/GRADLE_BUILD_LOG.txt
+            ${{ env.P }}/receipts/LINT_RELEASE.xml
+            ${{ env.P }}/receipts/SECA_SOURCE_AUDIT.json
+            ${{ env.P }}/receipts/SECA_SOURCE_AUDIT.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce Android build gate
+        if: steps.android_build.outcome != 'success'
+        run: |
+          echo "Android build gate failed. Diagnostic artifact was preserved."
+          exit 1
+
+      - name: Verify signing, package identity, permissions, and artifact truth
+        working-directory: ${{ env.P }}
+        run: |
+          set -euo pipefail
+          BT="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          test -x "$BT/apksigner"
+          test -x "$BT/aapt"
+          "$BT/apksigner" verify --verbose --print-certs "downloads/$APK" | tee receipts/APKSIGNER_RECEIPT.txt
+          "$BT/aapt" dump badging "downloads/$APK" | tee receipts/AAPT_BADGING_RECEIPT.txt
+          grep -q "package: name='$PKG'" receipts/AAPT_BADGING_RECEIPT.txt
+          ! grep -q "android.permission.INTERNET" receipts/AAPT_BADGING_RECEIPT.txt
           python3 tools/seca_audit.py --stage artifact \
-            --apk "downloads/$APK_NAME" \
-            --aab "downloads/$AAB_NAME" \
+            --apk "downloads/$APK" \
+            --aab "downloads/$AAB" \
             --apksigner-receipt receipts/APKSIGNER_RECEIPT.txt \
             --aapt-receipt receipts/AAPT_BADGING_RECEIPT.txt
 
-      - name: Run Android emulator installation, launch, and instrumentation gates
+      - name: Preserve signed Android build candidate immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Signed-Candidate
+          path: |
+            ${{ env.P }}/downloads/ASS-LIGHT-Android-RC1.apk
+            ${{ env.P }}/downloads/ASS-LIGHT-Android-RC1.aab
+            ${{ env.P }}/receipts/APKSIGNER_RECEIPT.txt
+            ${{ env.P }}/receipts/AAPT_BADGING_RECEIPT.txt
+            ${{ env.P }}/receipts/SECA_ARTIFACT_AUDIT.json
+            ${{ env.P }}/receipts/SECA_ARTIFACT_AUDIT.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Emulator install, launch, sound startup, and Portal Seal cleanup
+        id: android_runtime
+        continue-on-error: true
+        timeout-minutes: 18
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -110,14 +164,41 @@ jobs:
           disable-animations: true
           script: |
             set -euo pipefail
-            cd "$GITHUB_WORKSPACE/$PROJECT_DIR"
-            adb install -r "downloads/$APK_NAME" | tee receipts/ADB_INSTALL_RECEIPT.txt
-            adb shell pm grant "$PACKAGE_ID" android.permission.POST_NOTIFICATIONS || true
-            adb shell monkey -p "$PACKAGE_ID" -c android.intent.category.LAUNCHER 1 | tee receipts/ADB_LAUNCH_RECEIPT.txt
-            gradle --no-daemon connectedDebugAndroidTest
+            cd "$GITHUB_WORKSPACE/$P"
+            adb install -r "downloads/$APK" | tee receipts/ADB_INSTALL_RECEIPT.txt
+            adb shell pm grant "$PKG" android.permission.POST_NOTIFICATIONS || true
+            adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 | tee receipts/ADB_LAUNCH_RECEIPT.txt
+            set +e
+            gradle --no-daemon --console=plain connectedDebugAndroidTest 2>&1 | tee receipts/GRADLE_RUNTIME_LOG.txt
+            code=${PIPESTATUS[0]}
+            set -e
+            if [ "$code" -ne 0 ]; then
+              echo "SECA RUNTIME FAILURE TAIL"
+              tail -n 260 receipts/GRADLE_RUNTIME_LOG.txt
+              exit "$code"
+            fi
+
+      - name: Upload runtime diagnostics regardless of outcome
+        if: always() && steps.android_build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Runtime-Diagnostics
+          path: |
+            ${{ env.P }}/receipts/ADB_INSTALL_RECEIPT.txt
+            ${{ env.P }}/receipts/ADB_LAUNCH_RECEIPT.txt
+            ${{ env.P }}/receipts/GRADLE_RUNTIME_LOG.txt
+            ${{ env.P }}/app/build/outputs/androidTest-results/connected/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce Android runtime gate
+        if: steps.android_runtime.outcome != 'success'
+        run: |
+          echo "Android runtime gate failed. Diagnostic artifact was preserved."
+          exit 1
 
       - name: Run SECA runtime and final promotion audits
-        working-directory: ${{ env.PROJECT_DIR }}
+        working-directory: ${{ env.P }}
         run: |
           set -euo pipefail
           python3 tools/seca_audit.py --stage runtime \
@@ -126,49 +207,38 @@ jobs:
             --launch-receipt receipts/ADB_LAUNCH_RECEIPT.txt
           python3 tools/seca_audit.py --stage final
 
-      - name: Assemble public proof packet
-        working-directory: ${{ env.PROJECT_DIR }}
+      - name: Assemble proof packet and checksums
+        working-directory: ${{ env.P }}
         run: |
           set -euo pipefail
-          cp PRODUCT_DEFINITION.json downloads/
-          cp SECA_GATE_MATRIX.json downloads/
-          cp docs/BUILD_TRUTH.md downloads/
-          cp docs/PRIVACY_POLICY.md downloads/
-          cp docs/DATA_SAFETY.md downloads/
-          cp docs/MANUAL_HITL_DEVICE_RECEIPT.md downloads/
-          cp receipts/SECA_SOURCE_AUDIT.json downloads/
-          cp receipts/SECA_SOURCE_AUDIT.md downloads/
-          cp receipts/SECA_ARTIFACT_AUDIT.json downloads/
-          cp receipts/SECA_ARTIFACT_AUDIT.md downloads/
-          cp receipts/SECA_RUNTIME_AUDIT.json downloads/
-          cp receipts/SECA_RUNTIME_AUDIT.md downloads/
-          cp receipts/SECA_FINAL_AUDIT.json downloads/
-          cp receipts/SECA_FINAL_AUDIT.md downloads/
-          cp receipts/APKSIGNER_RECEIPT.txt downloads/
-          cp receipts/AAPT_BADGING_RECEIPT.txt downloads/
-          cp receipts/ADB_INSTALL_RECEIPT.txt downloads/
-          cp receipts/ADB_LAUNCH_RECEIPT.txt downloads/
-          cp "$GITHUB_WORKSPACE/apps/ass-light-android/source.zip" downloads/ASS-LIGHT-Android-RC1-source.zip
+          cp PRODUCT_DEFINITION.json SECA_GATE_MATRIX.json downloads/
+          cp docs/*.md receipts/* downloads/
+          (
+            cd "$GITHUB_WORKSPACE"
+            zip -qr "$GITHUB_WORKSPACE/$P/downloads/ASS-LIGHT-Android-RC1-source.zip" "$P" \
+              -x "$P/app/build/*" "$P/downloads/*" "$P/receipts/*" "$P/app/src/main/res/raw/fart_*.wav"
+          )
           sha256sum downloads/* > downloads/SHA256SUMS.txt
 
-      - name: Upload immutable workflow proof artifact
+      - name: Upload immutable workflow proof packet
         uses: actions/upload-artifact@v4
         with:
           name: ASS-LIGHT-Android-RC1-Proof-Packet
-          path: ${{ env.DOWNLOAD_DIR }}/*
+          path: ${{ env.P }}/downloads/*
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish or replace public GitHub release assets
+      - name: Publish hosted direct-download Android RC
         if: github.event_name != 'pull_request'
+        working-directory: ${{ env.P }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$DOWNLOAD_DIR"/* --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" downloads/* --clobber
           else
-            gh release create "$RELEASE_TAG" "$DOWNLOAD_DIR"/* \
+            gh release create "$TAG" downloads/* \
               --title "ASS-LIGHT Android RC1" \
-              --notes "Direct-install Android release candidate. Automated SECA source, artifact, signing, emulator installation, launch, and instrumentation gates passed. Physical-phone speaker, flashlight, lock-screen, and OEM battery behavior remain manual proof gates documented in MANUAL_HITL_DEVICE_RECEIPT.md."
+              --notes "Direct-install Android RC. Automated SECA source, lint, build, signing, package, emulator installation, launch, MediaPlayer startup, randomized receipt bounds, and Portal Seal cleanup gates passed. Physical-phone speaker, flashlight, screen-lock, Bluetooth, and OEM battery behavior remain manual HITL gates. Google Play production signing and review remain blocked."
           fi
