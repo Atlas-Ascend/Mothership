@@ -1,0 +1,187 @@
+name: Build and SECA Audit ASS-LIGHT Android
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/ass-light-android/**"
+      - ".github/workflows/build-ass-light-android.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/ass-light-android/**"
+      - ".github/workflows/build-ass-light-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ass-light-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out Mothership
+        uses: actions/checkout@v4
+
+      - name: Materialize audited native Android source
+        working-directory: apps/ass-light-android
+        run: |
+          unzip -o source.zip -d .
+          cp -R overrides/. .
+          base64 --decode signing/asslight-direct.keystore.b64 > signing/asslight-direct.keystore
+          chmod 600 signing/asslight-direct.keystore
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Prepare Android 15 toolchain
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+
+      - name: Generate original Android-safe sound library
+        working-directory: apps/ass-light-android
+        run: python3 tools/generate_sounds.py
+
+      - name: SECA source and definition audit
+        working-directory: apps/ass-light-android
+        run: python3 tools/seca_audit.py --stage source
+
+      - name: Compile, lint, test-package, and sign release
+        working-directory: apps/ass-light-android
+        run: gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleReleaseAndroidTest
+
+      - name: Verify signatures and package declarations
+        run: |
+          mkdir -p downloads apps/ass-light-android/receipts
+          cp apps/ass-light-android/app/build/outputs/apk/release/app-release.apk downloads/ASS-LIGHT-Android-RC1.apk
+          cp apps/ass-light-android/app/build/outputs/bundle/release/app-release.aab downloads/ASS-LIGHT-Android-RC1.aab
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs downloads/ASS-LIGHT-Android-RC1.apk | tee apps/ass-light-android/receipts/APKSIGNER_RECEIPT.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging downloads/ASS-LIGHT-Android-RC1.apk | tee apps/ass-light-android/receipts/AAPT_BADGING_RECEIPT.txt
+          ! grep -q "uses-permission: name='android.permission.INTERNET'" apps/ass-light-android/receipts/AAPT_BADGING_RECEIPT.txt
+          grep -q "package: name='com.ghostatlas.asslight.rc'" apps/ass-light-android/receipts/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" apps/ass-light-android/receipts/AAPT_BADGING_RECEIPT.txt
+
+      - name: SECA artifact audit
+        working-directory: apps/ass-light-android
+        run: |
+          python3 tools/seca_audit.py --stage artifact \
+            --apk ../../downloads/ASS-LIGHT-Android-RC1.apk \
+            --aab ../../downloads/ASS-LIGHT-Android-RC1.aab \
+            --apksigner-receipt receipts/APKSIGNER_RECEIPT.txt \
+            --badging-receipt receipts/AAPT_BADGING_RECEIPT.txt
+
+      - name: Android API 35 install, launch, audio, service, and Portal Seal audit
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            adb install -r downloads/ASS-LIGHT-Android-RC1.apk | tee apps/ass-light-android/receipts/ADB_INSTALL_RECEIPT.txt
+            adb shell pm grant com.ghostatlas.asslight.rc android.permission.POST_NOTIFICATIONS || true
+            adb shell monkey -p com.ghostatlas.asslight.rc -c android.intent.category.LAUNCHER 1 | tee apps/ass-light-android/receipts/ADB_LAUNCH_RECEIPT.txt
+            sleep 2
+            adb shell pidof com.ghostatlas.asslight.rc
+            adb logcat -c
+            cd apps/ass-light-android
+            gradle --no-daemon connectedReleaseAndroidTest
+            cd ../..
+            if adb logcat -d | grep -E "FATAL EXCEPTION|AndroidRuntime.*com.ghostatlas.asslight"; then
+              echo "ASS-LIGHT crashed during emulator audit" >&2
+              exit 1
+            fi
+
+      - name: SECA runtime audit
+        working-directory: apps/ass-light-android
+        run: |
+          python3 tools/seca_audit.py --stage runtime \
+            --test-results app/build/outputs/androidTest-results/connected/release \
+            --install-receipt receipts/ADB_INSTALL_RECEIPT.txt \
+            --launch-receipt receipts/ADB_LAUNCH_RECEIPT.txt
+
+      - name: SECA final release gate
+        working-directory: apps/ass-light-android
+        run: python3 tools/seca_audit.py --stage final
+
+      - name: Assemble download packet and checksums
+        run: |
+          cp apps/ass-light-android/receipts/* downloads/
+          cp apps/ass-light-android/docs/PRIVACY_POLICY.md downloads/PRIVACY_POLICY.md
+          cp apps/ass-light-android/docs/MANUAL_HITL_DEVICE_RECEIPT.md downloads/MANUAL_HITL_DEVICE_RECEIPT.md
+          sha256sum downloads/ASS-LIGHT-Android-RC1.apk downloads/ASS-LIGHT-Android-RC1.aab > downloads/SHA256SUMS.txt
+          cat > downloads/INSTALL.txt <<'TXT'
+          ASS-LIGHT Android RC1 Direct Install
+
+          1. Download ASS-LIGHT-Android-RC1.apk on the Android phone or Chromebook.
+          2. Open the APK on the Android phone.
+          3. Android may ask you to allow installs from the browser or Files app. Enable it only for that source.
+          4. Tap Install, then Open.
+          5. Grant notifications so an active portal remains visible and stoppable.
+          6. Grant camera only when you deliberately use the flashlight feature. ASS-LIGHT does not capture photos, video, or audio.
+
+          The AAB is not directly installable. It is an RC package and must not be promoted to Play without the private production upload-key gate.
+          TXT
+
+      - name: Preserve downloadable workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1
+          path: downloads/
+          retention-days: 90
+
+      - name: Publish hosted download files to Mothership
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "Ghost Atlas Build Engine"
+          git config user.email "ghostatlasempire@gmail.com"
+          git add downloads
+          if git diff --cached --quiet; then
+            echo "Compiled RC files are unchanged."
+          else
+            git commit -m "Publish SECA-audited ASS-LIGHT Android RC1"
+            git push
+          fi
+
+      - name: Publish or update hosted GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view ass-light-android-rc1 >/dev/null 2>&1; then
+            gh release upload ass-light-android-rc1 \
+              downloads/ASS-LIGHT-Android-RC1.apk \
+              downloads/ASS-LIGHT-Android-RC1.aab \
+              downloads/SHA256SUMS.txt \
+              downloads/SECA_FINAL_RELEASE_RECEIPT.md \
+              downloads/MANUAL_HITL_DEVICE_RECEIPT.md \
+              --clobber
+          else
+            gh release create ass-light-android-rc1 \
+              downloads/ASS-LIGHT-Android-RC1.apk \
+              downloads/ASS-LIGHT-Android-RC1.aab \
+              downloads/SHA256SUMS.txt \
+              downloads/SECA_FINAL_RELEASE_RECEIPT.md \
+              downloads/MANUAL_HITL_DEVICE_RECEIPT.md \
+              --title "ASS-LIGHT Android RC1" \
+              --notes "Native Android release candidate. Definition, source, generated sound assets, compilation, lint, signing, install, launch, randomized MediaPlayer playback, visible foreground-service operation, and Portal Seal cleanup are automated SECA gates. Physical-phone sound quality, rear flashlight output, screen-lock timing, OEM battery behavior, private Play signing, and Play Console review remain explicit HITL gates."
+          fi
