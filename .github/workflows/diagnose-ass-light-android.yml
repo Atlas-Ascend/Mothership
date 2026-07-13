@@ -1,0 +1,51 @@
+name: Build ASS-LIGHT Android Installable RC
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/ass-light-android/project/**"
+      - ".github/workflows/diagnose-ass-light-android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-installable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android 35
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Build exact full Android RC bundle
+        working-directory: apps/ass-light-android/project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p installable
+          python3 tools/generate_sounds.py | tee installable/SOUND_GENERATION_RECEIPT.txt
+          gradle --no-daemon clean :app:lintRelease :app:assembleRelease :app:bundleRelease :app:assembleDebug :app:assembleDebugAndroidTest --stacktrace --console=plain | tee installable/GRADLE_BUILD_RECEIPT.txt
+          cp app/build/outputs/apk/release/app-release.apk installable/ASS-LIGHT-Android-RC1.apk
+          cp app/build/outputs/bundle/release/app-release.aab installable/ASS-LIGHT-Android-RC1.aab
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs installable/ASS-LIGHT-Android-RC1.apk | tee installable/APKSIGNER_RECEIPT.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging installable/ASS-LIGHT-Android-RC1.apk | tee installable/AAPT_BADGING_RECEIPT.txt
+          grep -q "package: name='com.ghostatlas.asslight.rc'" installable/AAPT_BADGING_RECEIPT.txt
+          grep -q "targetSdkVersion:'35'" installable/AAPT_BADGING_RECEIPT.txt
+          ! grep -q "android.permission.INTERNET" installable/AAPT_BADGING_RECEIPT.txt
+          sha256sum installable/ASS-LIGHT-Android-RC1.apk installable/ASS-LIGHT-Android-RC1.aab > installable/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Installable
+          path: apps/ass-light-android/project/installable/
+          if-no-files-found: error
+          retention-days: 90
