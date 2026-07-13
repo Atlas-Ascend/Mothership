@@ -82,6 +82,8 @@ jobs:
           python3 tools/seca_audit.py --stage source
 
       - name: Lint and build APK, AAB, debug app, and instrumentation package
+        id: android_build
+        continue-on-error: true
         working-directory: ${{ env.P }}
         run: |
           set -euo pipefail
@@ -92,12 +94,31 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "SECA BUILD FAILURE TAIL"
-            tail -n 220 receipts/GRADLE_BUILD_LOG.txt
+            tail -n 260 receipts/GRADLE_BUILD_LOG.txt
             exit "$code"
           fi
           cp app/build/outputs/apk/release/app-release.apk "downloads/$APK"
           cp app/build/outputs/bundle/release/app-release.aab "downloads/$AAB"
           cp app/build/reports/lint-results-release.xml receipts/LINT_RELEASE.xml
+
+      - name: Upload build diagnostics regardless of outcome
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Build-Diagnostics
+          path: |
+            ${{ env.P }}/receipts/GRADLE_BUILD_LOG.txt
+            ${{ env.P }}/receipts/LINT_RELEASE.xml
+            ${{ env.P }}/receipts/SECA_SOURCE_AUDIT.json
+            ${{ env.P }}/receipts/SECA_SOURCE_AUDIT.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce Android build gate
+        if: steps.android_build.outcome != 'success'
+        run: |
+          echo "Android build gate failed. Diagnostic artifact was preserved."
+          exit 1
 
       - name: Verify signing, package identity, permissions, and artifact truth
         working-directory: ${{ env.P }}
@@ -117,6 +138,8 @@ jobs:
             --aapt-receipt receipts/AAPT_BADGING_RECEIPT.txt
 
       - name: Emulator install, launch, sound startup, and Portal Seal cleanup
+        id: android_runtime
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -136,9 +159,28 @@ jobs:
             set -e
             if [ "$code" -ne 0 ]; then
               echo "SECA RUNTIME FAILURE TAIL"
-              tail -n 240 receipts/GRADLE_RUNTIME_LOG.txt
+              tail -n 260 receipts/GRADLE_RUNTIME_LOG.txt
               exit "$code"
             fi
+
+      - name: Upload runtime diagnostics regardless of outcome
+        if: always() && steps.android_build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ASS-LIGHT-Android-RC1-Runtime-Diagnostics
+          path: |
+            ${{ env.P }}/receipts/ADB_INSTALL_RECEIPT.txt
+            ${{ env.P }}/receipts/ADB_LAUNCH_RECEIPT.txt
+            ${{ env.P }}/receipts/GRADLE_RUNTIME_LOG.txt
+            ${{ env.P }}/app/build/outputs/androidTest-results/connected/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce Android runtime gate
+        if: steps.android_runtime.outcome != 'success'
+        run: |
+          echo "Android runtime gate failed. Diagnostic artifact was preserved."
+          exit 1
 
       - name: Run SECA runtime and final promotion audits
         working-directory: ${{ env.P }}
